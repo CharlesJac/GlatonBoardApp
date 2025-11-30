@@ -19,7 +19,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   onComplete,
   onLabelChange 
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Matter.Engine | null>(null);
   const renderRef = useRef<Matter.Render | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
@@ -28,28 +28,34 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   const ballsDroppedRef = useRef(0);
   const lastDropTimeRef = useRef(0);
   const animationFrameRef = useRef<number>(0);
-  const isResettingRef = useRef(false);
-
-  // Track container dimensions for overlay rendering
+  
+  // Track container dimensions for overlay rendering and physics boundaries
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   // Initialize Physics Engine
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!canvasContainerRef.current) return;
+
+    // Get initial dimensions
+    const width = canvasContainerRef.current.clientWidth;
+    const height = canvasContainerRef.current.clientHeight;
+
+    // Avoid initializing if dimensions are 0 (e.g. hidden or not laid out)
+    if (width === 0 || height === 0) return;
 
     // Create Engine
     const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1, scale: 0.001 } // Adjusted gravity for scale
+      gravity: { x: 0, y: 1, scale: 0.001 }
     });
     engineRef.current = engine;
 
     // Create Renderer
     const render = Matter.Render.create({
-      element: containerRef.current,
+      element: canvasContainerRef.current,
       engine: engine,
       options: {
-        width: containerRef.current.clientWidth,
-        height: containerRef.current.clientHeight,
+        width: width,
+        height: height,
         wireframes: false,
         background: 'transparent',
         pixelRatio: window.devicePixelRatio,
@@ -64,21 +70,27 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     Matter.Render.run(render);
     Matter.Runner.run(runner, engine);
 
-    // Initial measurement
-    setDimensions({
-        width: containerRef.current.clientWidth,
-        height: containerRef.current.clientHeight
-    });
+    setDimensions({ width, height });
 
-    // Resize Handler
+    // Handle Window Resize
     const handleResize = () => {
-      if (!containerRef.current || !renderRef.current) return;
-      const newWidth = containerRef.current.clientWidth;
-      const newHeight = containerRef.current.clientHeight;
+      if (!canvasContainerRef.current || !renderRef.current) return;
+      const newWidth = canvasContainerRef.current.clientWidth;
+      const newHeight = canvasContainerRef.current.clientHeight;
 
-      renderRef.current.canvas.width = newWidth;
-      renderRef.current.canvas.height = newHeight;
+      // Update Render dimensions
+      const render = renderRef.current;
+      render.bounds.max.x = newWidth;
+      render.bounds.max.y = newHeight;
+      render.options.width = newWidth;
+      render.options.height = newHeight;
       
+      // Critical: Update both resolution and display size for HighDPI
+      render.canvas.width = newWidth * window.devicePixelRatio;
+      render.canvas.height = newHeight * window.devicePixelRatio;
+      render.canvas.style.width = `${newWidth}px`;
+      render.canvas.style.height = `${newHeight}px`;
+
       setDimensions({ width: newWidth, height: newHeight });
     };
 
@@ -92,21 +104,22 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       Matter.World.clear(engine.world, false);
       Matter.Engine.clear(engine);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, []);
 
-  // Watch for Reset or Config Change (setupBoard)
+  // Board Setup (Walls, Pegs, Bins)
   useEffect(() => {
+    // Only run if we have a valid engine and dimensions
+    if (!engineRef.current || dimensions.width === 0) return;
+    
+    // Only reset/setup if idle or if dimensions changed significantly
     if (status === 'idle') {
-      isResettingRef.current = true;
-      ballsDroppedRef.current = 0;
-      setupBoard();
-      isResettingRef.current = false;
+        setupBoard();
+        ballsDroppedRef.current = 0;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, config, dimensions]); // Re-setup if dimensions change while idle
+  }, [status, config, dimensions]); 
 
-  // Main Simulation Loop
+  // Simulation Loop (Dropping Balls)
   useEffect(() => {
     if (status !== 'running') {
         if (animationFrameRef.current) {
@@ -125,8 +138,8 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
           lastDropTimeRef.current = timestamp;
           ballsDroppedRef.current += 1;
         }
-      } else {
-         // All balls dropped.
+      } else if (onComplete && ballsDroppedRef.current >= config.ballCount) {
+         // Check if we should auto-complete (optional)
       }
 
       animationFrameRef.current = requestAnimationFrame(loop);
@@ -137,37 +150,36 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     return () => {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [status, config, ballPattern]);
+  }, [status, config, ballPattern, onComplete]);
 
 
   const setupBoard = () => {
-    if (!engineRef.current || !renderRef.current || !containerRef.current) return;
+    if (!engineRef.current || !canvasContainerRef.current) return;
     
     const world = engineRef.current.world;
-    Matter.World.clear(world, false); // Clear bodies, keep constraints if any
+    Matter.World.clear(world, false); 
 
-    const width = containerRef.current.clientWidth;
-    const height = containerRef.current.clientHeight;
+    const width = canvasContainerRef.current.clientWidth;
+    const height = canvasContainerRef.current.clientHeight;
 
     // --- Configuration ---
     const { rowCount, bucketCount, pegSize } = config;
     
-    // Calculate dimensions
-    // Board padding
+    // Board positioning
+    // We want the pegs to form a triangle/pyramid.
     const paddingX = 40;
-    const paddingTop = 60;
+    const paddingTop = 80; // Space for funnel
     const availableWidth = width - (paddingX * 2);
     
-    // Determine horizontal spacing based on rows (Pyramid structure)
-    // The visual pyramid is usually 'rowCount' tall.
+    // Calculate Spacing
     const spacingX = availableWidth / (rowCount + 2); 
-    const spacingY = spacingX * 0.866; // Hexagonal packing height ratio (sin(60deg))
+    const spacingY = spacingX * 0.866; // Hexagonal packing
 
     // --- 1. Pegs (Triangles) ---
     const pegs: Matter.Body[] = [];
     
     for (let row = 0; row < rowCount; row++) {
-      const itemsInRow = row + 1; // Pyramid
+      const itemsInRow = row + 1; 
       const rowWidth = (itemsInRow - 1) * spacingX;
       const startX = (width / 2) - (rowWidth / 2);
       
@@ -175,12 +187,11 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
         const x = startX + col * spacingX;
         const y = paddingTop + row * spacingY;
         
-        // Triangle pointing UP
-        const triangle = Matter.Bodies.polygon(x, y, 3, pegSize * 1.5, {
+        const triangle = Matter.Bodies.polygon(x, y, 3, pegSize * 1.8, {
           isStatic: true,
-          angle: -Math.PI / 2, // Rotated to point up
+          angle: -Math.PI / 2, // Pointing UP
           render: {
-            fillStyle: '#94a3b8' // Slate 400
+            fillStyle: '#94a3b8' 
           },
           chamfer: { radius: 2 }
         });
@@ -189,28 +200,49 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       }
     }
 
-    // --- 2. Walls ---
-    const funnelLeft = Matter.Bodies.rectangle(width/2 - 40, 20, 80, 10, { isStatic: true, angle: Math.PI/3, render: { fillStyle: '#cbd5e1' } });
-    const funnelRight = Matter.Bodies.rectangle(width/2 + 40, 20, 80, 10, { isStatic: true, angle: -Math.PI/3, render: { fillStyle: '#cbd5e1' } });
+    // --- 2. Funnel ---
+    // Guides balls to the center top
+    const funnelY = 40;
+    const funnelGap = 40;
+    const funnelWidth = 120;
     
+    const funnelLeft = Matter.Bodies.rectangle(
+        (width / 2) - (funnelGap/2) - (funnelWidth/2), 
+        funnelY, 
+        funnelWidth, 
+        10, 
+        { 
+            isStatic: true, 
+            angle: Math.PI / 6, // 30 degrees
+            render: { fillStyle: '#64748b' } 
+        }
+    );
+    
+    const funnelRight = Matter.Bodies.rectangle(
+        (width / 2) + (funnelGap/2) + (funnelWidth/2), 
+        funnelY, 
+        funnelWidth, 
+        10, 
+        { 
+            isStatic: true, 
+            angle: -Math.PI / 6, 
+            render: { fillStyle: '#64748b' } 
+        }
+    );
+
     const wallLeft = Matter.Bodies.rectangle(0, height/2, 20, height, { isStatic: true, render: { visible: false } });
     const wallRight = Matter.Bodies.rectangle(width, height/2, 20, height, { isStatic: true, render: { visible: false } });
     
-    // --- 3. Buckets/Bins ---
+    // --- 3. Buckets ---
     const bins: Matter.Body[] = [];
-    const bucketHeight = 200;
+    const bucketHeight = 220;
     
-    // Calculate bin positioning
-    // We want `bucketCount` bins, meaning `bucketCount + 1` dividers.
-    // The width of the entire bin area should match the spread of the balls.
-    // The spread is related to `bucketCount * spacingX`.
+    // Center the bins
     const totalBinWidth = bucketCount * spacingX;
     const binStartX = (width / 2) - (totalBinWidth / 2);
     
     for (let i = 0; i <= bucketCount; i++) {
-        // Divider positions
         const divX = binStartX + (i * spacingX);
-        
         const divider = Matter.Bodies.rectangle(
             divX, 
             height - (bucketHeight/2), 
@@ -240,18 +272,19 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   };
 
   const spawnBall = () => {
-    if (!engineRef.current) return;
+    if (!engineRef.current || !canvasContainerRef.current) return;
     
-    const { width } = renderRef.current?.canvas || { width: 800 };
+    const width = canvasContainerRef.current.clientWidth;
     const { ballSize, ballRestitution } = config;
     
     const patternIndex = ballsDroppedRef.current % ballPattern.length;
     const colorObj = ballPattern[patternIndex] || ballPattern[0];
     
-    // Jitter for center drop
-    const jitter = (Math.random() - 0.5) * 2; 
+    // Small jitter to prevent perfect stacking
+    const jitter = (Math.random() - 0.5) * 4; 
     
-    const ball = Matter.Bodies.circle(width / 2 + jitter, -20, ballSize, {
+    // Spawn above the funnel
+    const ball = Matter.Bodies.circle(width / 2 + jitter, -30, ballSize, {
       restitution: ballRestitution,
       friction: 0.001,
       density: 0.004,
@@ -263,14 +296,14 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     Matter.World.add(engineRef.current.world, ball);
   };
 
-  // Helper to render editable labels overlay
+  // Render input labels at the bottom
   const renderLabels = () => {
       if (dimensions.width === 0) return null;
       
       const { rowCount, bucketCount } = config;
       const width = dimensions.width;
       
-      // Mirror physics calculations for positioning
+      // Re-calculate geometry to align labels with bins
       const paddingX = 40;
       const availableWidth = width - (paddingX * 2);
       const spacingX = availableWidth / (rowCount + 2);
@@ -278,7 +311,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       const binStartX = (width / 2) - (totalBinWidth / 2);
 
       return (
-        <div className="absolute bottom-0 left-0 w-full pointer-events-none" style={{ height: '40px' }}>
+        <div className="absolute bottom-0 left-0 w-full h-[40px] pointer-events-none z-10">
             {bucketLabels.map((label, i) => {
                 const centerX = binStartX + (i * spacingX) + (spacingX / 2);
                 return (
@@ -287,4 +320,32 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
                         type="text"
                         value={label}
                         onChange={(e) => onLabelChange(i, e.target.value)}
-                        className="absolute bottom-1 text-center bg-transparent border-none focus:bg-white/80 focus:ring-1 focus:ring-indigo-300 focus:outline-none text-xs font-bold text-slate-600 pointer-events-auto transition-all rounded hover:bg
+                        className="absolute bottom-1 text-center bg-transparent border-none focus:bg-white/80 focus:ring-1 focus:ring-indigo-300 focus:outline-none text-xs font-bold text-slate-600 pointer-events-auto transition-all rounded hover:bg-white/40 shadow-sm"
+                        style={{
+                            width: Math.max(20, spacingX - 4),
+                            left: centerX - (Math.max(20, spacingX - 4) / 2),
+                        }}
+                        aria-label={`Label for column ${i + 1}`}
+                    />
+                );
+            })}
+        </div>
+      );
+  };
+
+  return (
+    <div className="w-full h-full relative bg-white isolate">
+       {/* Matter.js Canvas Container */}
+       <div ref={canvasContainerRef} className="absolute inset-0 z-0 cursor-crosshair" />
+       
+       {/* UI Overlays */}
+       {renderLabels()}
+       
+       <div className="absolute top-2 left-2 text-xs text-slate-400 font-mono pointer-events-none select-none z-10">
+          Dropped: {ballsDroppedRef.current} / {config.ballCount}
+       </div>
+    </div>
+  );
+};
+
+export default GaltonBoard;
