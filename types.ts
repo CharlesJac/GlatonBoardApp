@@ -14,6 +14,11 @@ export interface BallColor {
   name: string;
 }
 
+export interface BallDefinition {
+  color: BallColor;
+  count: number;
+}
+
 export type SimulationStatus = 'idle' | 'running' | 'paused' | 'completed';
 
 export const DEFAULT_COLORS: BallColor[] = [

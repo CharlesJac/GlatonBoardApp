@@ -1,24 +1,53 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { LayoutDashboard, Play, RotateCcw, Pause } from 'lucide-react';
 import GaltonBoard from './components/GaltonBoard';
 import Controls from './components/Controls';
-import { SimulationConfig, BallColor, DEFAULT_COLORS, SimulationStatus } from './types';
+import { SimulationConfig, BallColor, DEFAULT_COLORS, SimulationStatus, BallDefinition } from './types';
 
 const App: React.FC = () => {
   const [status, setStatus] = useState<SimulationStatus>('idle');
   const [config, setConfig] = useState<SimulationConfig>({
     rowCount: 12,
-    ballCount: 200,
-    bucketCount: 13, // Usually rowCount + 1
+    ballCount: 200, // This will be overwritten by the sum of ballDefinitions
+    bucketCount: 13, 
     pegSize: 6,
     ballSize: 5,
     ballRestitution: 0.5,
     dropSpeedMs: 50,
   });
 
-  // The user defines a pattern of balls to drop.
-  const [ballPattern, setBallPattern] = useState<BallColor[]>([DEFAULT_COLORS[0]]);
-  
+  // User defines counts for each color
+  const [ballDefinitions, setBallDefinitions] = useState<BallDefinition[]>([
+    { color: DEFAULT_COLORS[0], count: 100 },
+    { color: DEFAULT_COLORS[1], count: 100 },
+    { color: DEFAULT_COLORS[2], count: 0 },
+    { color: DEFAULT_COLORS[3], count: 0 },
+    { color: DEFAULT_COLORS[4], count: 0 },
+  ]);
+
+  // Derived: Flattened queue of balls to drop
+  const ballQueue = useMemo(() => {
+    const queue: BallColor[] = [];
+    ballDefinitions.forEach(def => {
+      for (let i = 0; i < def.count; i++) {
+        queue.push(def.color);
+      }
+    });
+    // Optional: Shuffle the queue if you want random mixing, 
+    // or keep it sequential (Blue then Red). 
+    // For now, let's keep it sequential as per "injecting" balls into the pool usually implies order or composition.
+    // If the user wants to mix them, we could add a "Shuffle" option later. 
+    return queue;
+  }, [ballDefinitions]);
+
+  // Sync config.ballCount with the total defined balls
+  useEffect(() => {
+    setConfig(prev => ({
+      ...prev,
+      ballCount: ballQueue.length
+    }));
+  }, [ballQueue.length]);
+
   // Editable labels for the bucket columns
   const [bucketLabels, setBucketLabels] = useState<string[]>([]);
 
@@ -48,9 +77,45 @@ const App: React.FC = () => {
     setBucketLabels(newLabels);
   };
 
-  const handleStart = () => setStatus('running');
+  const handleStart = () => {
+    if (ballQueue.length === 0) return;
+    setStatus('running');
+  };
   const handlePause = () => setStatus('paused');
   const handleReset = () => setStatus('idle');
+
+  // Triggered when simulation detects all balls have settled
+  const handleComplete = () => {
+    if (status === 'running') {
+        setStatus('paused');
+    }
+  };
+
+  const handleResetAndPlay = () => {
+    setStatus('idle');
+    // Allow a brief moment for the board to clear (useEffect in GaltonBoard runs on 'idle')
+    setTimeout(() => {
+        if (ballQueue.length > 0) {
+            setStatus('running');
+        }
+    }, 50);
+  };
+
+  // Keyboard Shortcuts (Space to Reset + Play)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.code === 'Space') {
+             // Ignore if user is typing in an input field
+             if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+                 return;
+             }
+             e.preventDefault();
+             handleResetAndPlay();
+        }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [ballQueue.length]);
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-100">
@@ -74,7 +139,8 @@ const App: React.FC = () => {
           ) : (
             <button
               onClick={handleStart}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-md font-medium shadow-sm transition-colors"
+              disabled={ballQueue.length === 0}
+              className={`flex items-center gap-2 px-4 py-2 text-white rounded-md font-medium shadow-sm transition-colors ${ballQueue.length === 0 ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
             >
               <Play className="w-4 h-4" /> {status === 'paused' ? 'Resume' : 'Start'}
             </button>
@@ -92,13 +158,17 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 flex overflow-hidden">
         {/* Canvas Area */}
-        <div className="flex-1 relative bg-slate-50 p-4 flex items-center justify-center overflow-hidden">
+        <div 
+          className="flex-1 relative bg-slate-50 p-4 flex items-center justify-center overflow-hidden"
+          onDoubleClick={handleResetAndPlay}
+          title="Double click to Reset & Play"
+        >
           <div className="w-full h-full bg-white rounded-xl shadow-inner border border-slate-200 overflow-hidden relative">
              <GaltonBoard 
                 status={status}
                 config={config}
-                ballPattern={ballPattern}
-                onComplete={() => setStatus('completed')}
+                ballQueue={ballQueue}
+                onComplete={handleComplete}
                 bucketLabels={bucketLabels}
                 onLabelChange={handleLabelChange}
              />
@@ -110,8 +180,8 @@ const App: React.FC = () => {
           <Controls 
             config={config} 
             setConfig={setConfig} 
-            ballPattern={ballPattern}
-            setBallPattern={setBallPattern}
+            ballDefinitions={ballDefinitions}
+            setBallDefinitions={setBallDefinitions}
             disabled={status === 'running'}
           />
         </aside>

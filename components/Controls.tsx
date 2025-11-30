@@ -1,33 +1,37 @@
 import React from 'react';
-import { SimulationConfig, BallColor, DEFAULT_COLORS } from '../types';
-import { Trash2, Plus, GripVertical } from 'lucide-react';
+import { SimulationConfig, BallDefinition, DEFAULT_COLORS } from '../types';
+import { Users, Info } from 'lucide-react';
 
 interface ControlsProps {
   config: SimulationConfig;
   setConfig: React.Dispatch<React.SetStateAction<SimulationConfig>>;
-  ballPattern: BallColor[];
-  setBallPattern: React.Dispatch<React.SetStateAction<BallColor[]>>;
+  ballDefinitions: BallDefinition[];
+  setBallDefinitions: React.Dispatch<React.SetStateAction<BallDefinition[]>>;
   disabled: boolean;
 }
 
-const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballPattern, setBallPattern, disabled }) => {
+const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions, setBallDefinitions, disabled }) => {
 
   const handleChange = (key: keyof SimulationConfig, value: number) => {
     setConfig(prev => ({ ...prev, [key]: value }));
   };
 
-  const addBallToPattern = (color: BallColor) => {
-    setBallPattern(prev => [...prev, color]);
+  const handleCountChange = (colorId: string, newCount: number) => {
+    if (newCount < 0) return;
+    setBallDefinitions(prev => {
+      const exists = prev.find(d => d.color.id === colorId);
+      if (exists) {
+        return prev.map(d => d.color.id === colorId ? { ...d, count: newCount } : d);
+      } else {
+        // Should not happen with current logic, but safe fallback
+        const color = DEFAULT_COLORS.find(c => c.id === colorId);
+        if (color) return [...prev, { color, count: newCount }];
+        return prev;
+      }
+    });
   };
 
-  const removeBallFromPattern = (index: number) => {
-    if (ballPattern.length <= 1) return; // Prevent empty
-    setBallPattern(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const clearPattern = () => {
-    setBallPattern([DEFAULT_COLORS[0]]);
-  };
+  const totalBalls = ballDefinitions.reduce((acc, curr) => acc + curr.count, 0);
 
   return (
     <div className="p-6 space-y-8 pb-20">
@@ -90,25 +94,11 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballPattern, set
 
       <hr className="border-slate-100" />
 
-      {/* 2. Ball Configuration */}
+      {/* 2. Physics Configuration */}
       <section>
-        <h2 className="text-sm uppercase tracking-wide text-slate-500 font-bold mb-4">Ball Configuration</h2>
+        <h2 className="text-sm uppercase tracking-wide text-slate-500 font-bold mb-4">Physics</h2>
         
         <div className="space-y-4">
-          <div>
-            <div className="flex justify-between mb-1">
-              <label className="text-sm font-medium text-slate-700">Total Balls</label>
-              <span className="text-sm text-slate-500">{config.ballCount}</span>
-            </div>
-            <input 
-              type="range" min="10" max="1000" step="10"
-              value={config.ballCount}
-              onChange={(e) => handleChange('ballCount', parseInt(e.target.value))}
-              disabled={disabled}
-              className="w-full accent-indigo-600 cursor-pointer disabled:opacity-50"
-            />
-          </div>
-
           <div>
             <div className="flex justify-between mb-1">
               <label className="text-sm font-medium text-slate-700">Ball Size</label>
@@ -155,54 +145,45 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballPattern, set
 
       <hr className="border-slate-100" />
 
-      {/* 3. Color Pattern Builder */}
+      {/* 3. Ball Pool Configuration */}
       <section className={disabled ? "opacity-50 pointer-events-none" : ""}>
-        <div className="flex justify-between items-end mb-4">
-            <h2 className="text-sm uppercase tracking-wide text-slate-500 font-bold">Color Pattern</h2>
-            <button onClick={clearPattern} className="text-xs text-red-500 hover:text-red-700 underline">Reset Pattern</button>
+        <div className="flex justify-between items-center mb-4">
+            <h2 className="text-sm uppercase tracking-wide text-slate-500 font-bold">Ball Pool</h2>
+            <div className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2 py-1 rounded">
+                Total: {totalBalls}
+            </div>
         </div>
         
-        <p className="text-xs text-slate-500 mb-3">
-          Balls will cycle through this sequence.
-        </p>
-
-        {/* Pattern Visualizer */}
-        <div className="flex flex-wrap gap-2 mb-4 p-3 bg-slate-50 rounded-lg border border-slate-200 min-h-[60px] items-center">
-            {ballPattern.map((ball, idx) => (
-                <div key={`${ball.id}-${idx}`} className="group relative">
-                    <div 
-                        className="w-6 h-6 rounded-full border border-black/10 shadow-sm"
-                        style={{ backgroundColor: ball.color }}
-                        title={ball.name}
-                    />
-                    <button 
-                        onClick={() => removeBallFromPattern(idx)}
-                        className="absolute -top-2 -right-2 bg-white rounded-full p-0.5 border border-slate-200 shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                        <Trash2 className="w-3 h-3 text-slate-500" />
-                    </button>
-                </div>
-            ))}
-            
-            {/* Add Button Dropdown */}
-            <div className="relative group">
-                <button className="w-6 h-6 rounded-full border-2 border-dashed border-slate-300 flex items-center justify-center text-slate-400 hover:border-indigo-400 hover:text-indigo-500 transition-colors">
-                    <Plus className="w-4 h-4" />
-                </button>
+        <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 space-y-3">
+            {DEFAULT_COLORS.map((color) => {
+                const def = ballDefinitions.find(d => d.color.id === color.id);
+                const count = def ? def.count : 0;
                 
-                {/* Palette Popover */}
-                <div className="absolute top-full left-0 mt-2 bg-white rounded-lg shadow-xl border border-slate-200 p-2 grid grid-cols-5 gap-2 w-[180px] z-20 invisible opacity-0 group-hover:visible group-hover:opacity-100 transition-all">
-                    {DEFAULT_COLORS.map(c => (
-                        <button 
-                            key={c.id}
-                            onClick={() => addBallToPattern(c)}
-                            className="w-8 h-8 rounded-full border border-slate-100 hover:scale-110 transition-transform"
-                            style={{ backgroundColor: c.color }}
-                            title={c.name}
+                return (
+                    <div key={color.id} className="flex items-center gap-3">
+                        <div 
+                            className="w-6 h-6 rounded-full border border-black/10 flex-none shadow-sm"
+                            style={{ backgroundColor: color.color }}
                         />
-                    ))}
-                </div>
-            </div>
+                        <span className="text-sm text-slate-700 font-medium w-16">{color.name}</span>
+                        <div className="flex-1 flex items-center gap-2">
+                             <input 
+                                type="number" 
+                                min="0" 
+                                max="1000"
+                                value={count}
+                                onChange={(e) => handleCountChange(color.id, parseInt(e.target.value) || 0)}
+                                className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                             />
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+        
+        <div className="mt-3 flex items-start gap-2 text-xs text-slate-500">
+             <Info className="w-4 h-4 mt-0.5 flex-none text-slate-400" />
+             <p>Specify the number of balls for each color. The total count will update automatically.</p>
         </div>
       </section>
       

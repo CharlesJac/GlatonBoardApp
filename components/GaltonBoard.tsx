@@ -5,7 +5,7 @@ import { SimulationConfig, BallColor, SimulationStatus } from '../types';
 interface GaltonBoardProps {
   status: SimulationStatus;
   config: SimulationConfig;
-  ballPattern: BallColor[];
+  ballQueue: BallColor[]; // Changed from ballPattern to ballQueue
   bucketLabels: string[];
   onComplete: () => void;
   onLabelChange: (index: number, value: string) => void;
@@ -14,7 +14,7 @@ interface GaltonBoardProps {
 const GaltonBoard: React.FC<GaltonBoardProps> = ({ 
   status, 
   config, 
-  ballPattern, 
+  ballQueue, 
   bucketLabels, 
   onComplete,
   onLabelChange 
@@ -28,6 +28,12 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   const ballsDroppedRef = useRef(0);
   const lastDropTimeRef = useRef(0);
   const animationFrameRef = useRef<number>(0);
+  const onCompleteRef = useRef(onComplete);
+
+  // Update ref when prop changes to avoid effect dependency issues
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
   
   // Track container dimensions for overlay rendering and physics boundaries
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
@@ -119,7 +125,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, config, dimensions]); 
 
-  // Simulation Loop (Dropping Balls)
+  // Simulation Loop (Dropping Balls + Check Complete)
   useEffect(() => {
     if (status !== 'running') {
         if (animationFrameRef.current) {
@@ -132,14 +138,31 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       if (status !== 'running') return;
 
       // Drop Logic
-      if (ballsDroppedRef.current < config.ballCount) {
+      if (ballsDroppedRef.current < ballQueue.length) {
         if (timestamp - lastDropTimeRef.current > config.dropSpeedMs) {
           spawnBall();
           lastDropTimeRef.current = timestamp;
           ballsDroppedRef.current += 1;
         }
-      } else if (onComplete && ballsDroppedRef.current >= config.ballCount) {
-         // Check if we should auto-complete (optional)
+      } else {
+         // Auto-pause check: All balls dropped
+         // Check if they are all settled (speed is low and position is low enough)
+         if (engineRef.current) {
+             const balls = Matter.Composite.allBodies(engineRef.current.world).filter(b => b.label === 'ball');
+             if (balls.length > 0) {
+                 const allSettled = balls.every(b => {
+                     // Check if ball is roughly stationary and has fallen past the funnel area
+                     return b.speed < 0.15 && b.angularSpeed < 0.1 && b.position.y > 150;
+                 });
+                 
+                 if (allSettled) {
+                     onCompleteRef.current();
+                 }
+             } else if (balls.length === 0 && ballsDroppedRef.current > 0) {
+                 // Should technically not happen unless they fall out of world bounds
+                 onCompleteRef.current();
+             }
+         }
       }
 
       animationFrameRef.current = requestAnimationFrame(loop);
@@ -150,7 +173,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     return () => {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [status, config, ballPattern, onComplete]);
+  }, [status, config, ballQueue]); // Dependency on ballQueue
 
 
   const setupBoard = () => {
@@ -167,7 +190,8 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     
     // Board positioning
     const paddingX = 40;
-    const paddingTop = 150; 
+    // Reduced padding top to lift the board up, giving more room for bins at the bottom
+    const paddingTop = 110; 
     const availableWidth = width - (paddingX * 2);
     
     // Calculate Spacing
@@ -199,7 +223,8 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     }
 
     // --- 2. Funnel ---
-    const funnelY = 70;
+    // Moved funnel up to match reduced padding
+    const funnelY = 30; 
     const funnelAngle = Math.PI / 3.2; // ~56 degrees
     const funnelWidth = 140;
     const funnelThickness = 12;
@@ -253,6 +278,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const lastPegY = paddingTop + lastRowIndex * spacingY;
     const binStartY = lastPegY + (spacingY * 0.5) + (pegSize * 2);
     const floorY = height;
+    // Maximize bin height based on available space to floor
     const binHeight = Math.max(20, floorY - binStartY); 
     const binCenterY = binStartY + (binHeight / 2);
     
@@ -302,7 +328,6 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     // We start from the funnel tip X/Y reference and project upwards (to seal) and downwards (to bins)
     // using the exact slope derived from the peg grid.
     
-    // FIX: Start exactly at funnel bottom to avoid protrusion into the gap
     const wallTopY = funnelBottomY; 
     const wallBottomY = binStartY;
     
@@ -367,8 +392,9 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const width = canvasContainerRef.current.clientWidth;
     const { ballSize, ballRestitution } = config;
     
-    const patternIndex = ballsDroppedRef.current % ballPattern.length;
-    const colorObj = ballPattern[patternIndex] || ballPattern[0];
+    // Get the specific ball for this drop index
+    if (ballsDroppedRef.current >= ballQueue.length) return;
+    const color = ballQueue[ballsDroppedRef.current];
     
     // Jitter within the funnel spawn area
     // Ensure jitter is small enough so balls don't spawn inside the walls
@@ -376,12 +402,13 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     
     // Spawn above the funnel
     const ball = Matter.Bodies.circle(width / 2 + jitter, -20, ballSize, {
+      label: 'ball', // Critical for tracking
       restitution: ballRestitution,
       friction: 0, // Zero friction
       frictionAir: 0.02,
       density: 0.004,
       render: {
-        fillStyle: colorObj.color
+        fillStyle: color.color
       }
     });
 
