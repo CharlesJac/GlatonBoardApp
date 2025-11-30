@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { LayoutDashboard, Play, RotateCcw, Pause } from 'lucide-react';
 import GaltonBoard from './components/GaltonBoard';
 import Controls from './components/Controls';
@@ -33,10 +33,6 @@ const App: React.FC = () => {
         queue.push(def.color);
       }
     });
-    // Optional: Shuffle the queue if you want random mixing, 
-    // or keep it sequential (Blue then Red). 
-    // For now, let's keep it sequential as per "injecting" balls into the pool usually implies order or composition.
-    // If the user wants to mix them, we could add a "Shuffle" option later. 
     return queue;
   }, [ballDefinitions]);
 
@@ -117,6 +113,45 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [ballQueue.length]);
 
+
+  // Aspect Ratio Logic
+  const mainContainerRef = useRef<HTMLDivElement>(null);
+  const [boardSize, setBoardSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!mainContainerRef.current) return;
+    
+    const calculateSize = () => {
+        if (!mainContainerRef.current) return;
+        const { clientWidth: width, clientHeight: height } = mainContainerRef.current;
+        
+        // Target Aspect Ratio 9:16
+        const targetRatio = 9 / 16;
+        const containerRatio = width / height;
+
+        let w, h;
+        if (containerRatio > targetRatio) {
+            // Container is wider than target -> constrained by height
+            h = height;
+            w = height * targetRatio;
+        } else {
+            // Container is taller than target -> constrained by width
+            w = width;
+            h = width / targetRatio;
+        }
+        setBoardSize({ width: w, height: h });
+    };
+
+    // Initial calculation
+    calculateSize();
+
+    const observer = new ResizeObserver(calculateSize);
+    observer.observe(mainContainerRef.current);
+
+    return () => observer.disconnect();
+  }, []);
+
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-slate-100">
       {/* Header */}
@@ -159,11 +194,20 @@ const App: React.FC = () => {
       <main className="flex-1 flex overflow-hidden">
         {/* Canvas Area */}
         <div 
+          ref={mainContainerRef}
           className="flex-1 relative bg-slate-50 p-4 flex items-center justify-center overflow-hidden"
           onDoubleClick={handleResetAndPlay}
           title="Double click to Reset & Play"
         >
-          <div className="w-full h-full bg-white rounded-xl shadow-inner border border-slate-200 overflow-hidden relative">
+          <div 
+            className="bg-white rounded-xl shadow-inner border border-slate-200 overflow-hidden relative flex-none"
+            style={{ 
+                width: boardSize.width, 
+                height: boardSize.height,
+                // Fallback / transition smoothness
+                transition: 'width 0.1s ease-out, height 0.1s ease-out'
+            }}
+          >
              <GaltonBoard 
                 status={status}
                 config={config}
@@ -176,7 +220,7 @@ const App: React.FC = () => {
         </div>
 
         {/* Sidebar Controls */}
-        <aside className="w-96 flex-none bg-white border-l border-slate-200 overflow-y-auto">
+        <aside className="w-96 flex-none bg-white border-l border-slate-200 overflow-y-auto z-20 shadow-lg">
           <Controls 
             config={config} 
             setConfig={setConfig} 
