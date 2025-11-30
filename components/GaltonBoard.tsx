@@ -163,19 +163,18 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const height = canvasContainerRef.current.clientHeight;
 
     // --- Configuration ---
-    const { rowCount, bucketCount, pegSize } = config;
+    const { rowCount, bucketCount, pegSize, ballSize } = config;
     
     // Board positioning
-    // We want the pegs to form a triangle/pyramid.
     const paddingX = 40;
-    const paddingTop = 80; // Space for funnel
+    const paddingTop = 150; 
     const availableWidth = width - (paddingX * 2);
     
     // Calculate Spacing
     const spacingX = availableWidth / (rowCount + 2); 
     const spacingY = spacingX * 0.866; // Hexagonal packing
 
-    // --- 1. Pegs (Triangles) ---
+    // --- 1. Pegs (Circles) ---
     const pegs: Matter.Body[] = [];
     
     for (let row = 0; row < rowCount; row++) {
@@ -187,86 +186,177 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
         const x = startX + col * spacingX;
         const y = paddingTop + row * spacingY;
         
-        const triangle = Matter.Bodies.polygon(x, y, 3, pegSize * 1.8, {
+        const circle = Matter.Bodies.circle(x, y, pegSize, {
           isStatic: true,
-          angle: -Math.PI / 2, // Pointing UP
+          friction: 0, // Zero friction for smooth flow
           render: {
             fillStyle: '#94a3b8' 
-          },
-          chamfer: { radius: 2 }
+          }
         });
         
-        pegs.push(triangle);
+        pegs.push(circle);
       }
     }
 
     // --- 2. Funnel ---
-    // Guides balls to the center top
-    const funnelY = 40;
-    const funnelGap = 40;
-    const funnelWidth = 120;
+    const funnelY = 70;
+    const funnelAngle = Math.PI / 3.2; // ~56 degrees
+    const funnelWidth = 140;
+    const funnelThickness = 12;
+    // Widened gap to prevent sticking due to wall thickness protrusion
+    const funnelGap = Math.max(40, ballSize * 4 + 20); 
     
+    // Determine offset from center based on angle and width to maintain the gap
+    // Center X offset is calculated so the inner tips are separated by `funnelGap`
+    const funnelOffsetX = (funnelGap / 2) + (funnelWidth / 2) * Math.cos(funnelAngle);
+
     const funnelLeft = Matter.Bodies.rectangle(
-        (width / 2) - (funnelGap/2) - (funnelWidth/2), 
+        (width / 2) - funnelOffsetX, 
         funnelY, 
         funnelWidth, 
-        10, 
+        funnelThickness, 
         { 
             isStatic: true, 
-            angle: Math.PI / 6, // 30 degrees
-            render: { fillStyle: '#64748b' } 
+            angle: funnelAngle, 
+            chamfer: { radius: 5 },
+            render: { fillStyle: '#64748b' },
+            friction: 0, 
+            restitution: 0 
         }
     );
     
     const funnelRight = Matter.Bodies.rectangle(
-        (width / 2) + (funnelGap/2) + (funnelWidth/2), 
+        (width / 2) + funnelOffsetX, 
         funnelY, 
         funnelWidth, 
-        10, 
+        funnelThickness, 
         { 
             isStatic: true, 
-            angle: -Math.PI / 6, 
-            render: { fillStyle: '#64748b' } 
+            angle: -funnelAngle, 
+            chamfer: { radius: 5 },
+            render: { fillStyle: '#64748b' },
+            friction: 0,
+            restitution: 0
         }
     );
 
-    const wallLeft = Matter.Bodies.rectangle(0, height/2, 20, height, { isStatic: true, render: { visible: false } });
-    const wallRight = Matter.Bodies.rectangle(width, height/2, 20, height, { isStatic: true, render: { visible: false } });
-    
+    // Calculate funnel tip positions to connect walls
+    // The bottom-most point of the funnel structure
+    const funnelBottomY = funnelY + (funnelWidth / 2) * Math.sin(funnelAngle);
+    // The horizontal position of the inner tip (approximate)
+    const funnelTipXLeft = (width / 2) - (funnelGap / 2);
+    const funnelTipXRight = (width / 2) + (funnelGap / 2);
+
     // --- 3. Buckets ---
     const bins: Matter.Body[] = [];
-    const bucketHeight = 220;
+    const lastRowIndex = rowCount - 1;
+    const lastPegY = paddingTop + lastRowIndex * spacingY;
+    const binStartY = lastPegY + (spacingY * 0.5) + (pegSize * 2);
+    const floorY = height;
+    const binHeight = Math.max(20, floorY - binStartY); 
+    const binCenterY = binStartY + (binHeight / 2);
     
-    // Center the bins
     const totalBinWidth = bucketCount * spacingX;
     const binStartX = (width / 2) - (totalBinWidth / 2);
     
+    // Create dividers
     for (let i = 0; i <= bucketCount; i++) {
         const divX = binStartX + (i * spacingX);
         const divider = Matter.Bodies.rectangle(
             divX, 
-            height - (bucketHeight/2), 
+            binCenterY, 
             4, 
-            bucketHeight, 
+            binHeight, 
             { 
                 isStatic: true,
                 render: { fillStyle: '#cbd5e1' },
-                chamfer: { radius: 2 }
+                chamfer: { radius: 2 },
+                friction: 0
             }
         );
         bins.push(divider);
     }
     
+    // --- 4. Connected Walls (Air-tight & Parallel to Pegs) ---
+    // Calculate the angle parallel to the pegs layout
+    const pegSlopeAngle = Math.atan((spacingX / 2) / spacingY);
+    const tanAngle = Math.tan(pegSlopeAngle);
+    
+    // Helper to create a wall between two points
+    const createConnectionWall = (x1: number, y1: number, x2: number, y2: number) => {
+        const length = Math.hypot(x2 - x1, y2 - y1);
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const cx = (x1 + x2) / 2;
+        const cy = (y1 + y2) / 2;
+        const thickness = 14;
+
+        return Matter.Bodies.rectangle(cx, cy, length, thickness, {
+            isStatic: true,
+            angle: angle,
+            render: { fillStyle: '#e2e8f0' },
+            friction: 0,
+        });
+    };
+
+    // Calculate wall coordinates using strict geometric projection
+    // We start from the funnel tip X/Y reference and project upwards (to seal) and downwards (to bins)
+    // using the exact slope derived from the peg grid.
+    
+    // FIX: Start exactly at funnel bottom to avoid protrusion into the gap
+    const wallTopY = funnelBottomY; 
+    const wallBottomY = binStartY;
+    
+    // Left Wall: Slope / (X decreases as Y increases)
+    // Formula: x = anchorX - (y - anchorY) * tanAngle
+    const wallTopXLeft = funnelTipXLeft - (wallTopY - funnelBottomY) * tanAngle;
+    const wallBottomXLeft = funnelTipXLeft - (wallBottomY - funnelBottomY) * tanAngle;
+
+    const leftWall = createConnectionWall(
+        wallTopXLeft, wallTopY,
+        wallBottomXLeft, wallBottomY
+    );
+
+    // Right Wall: Slope \ (X increases as Y increases)
+    const wallTopXRight = funnelTipXRight + (wallTopY - funnelBottomY) * tanAngle;
+    const wallBottomXRight = funnelTipXRight + (wallBottomY - funnelBottomY) * tanAngle;
+
+    const rightWall = createConnectionWall(
+        wallTopXRight, wallTopY,
+        wallBottomXRight, wallBottomY
+    );
+    
+    // --- 5. Rising Side Borders ---
+    const wallThickness = 12;
+    
+    // Center the vertical walls exactly on the endpoint of the angled walls
+    const leftBinWall = Matter.Bodies.rectangle(
+        wallBottomXLeft,
+        binCenterY, 
+        wallThickness,
+        binHeight,
+        { isStatic: true, render: { fillStyle: '#e2e8f0' }, friction: 0 }
+    );
+    
+    const rightBinWall = Matter.Bodies.rectangle(
+        wallBottomXRight,
+        binCenterY,
+        wallThickness,
+        binHeight,
+        { isStatic: true, render: { fillStyle: '#e2e8f0' }, friction: 0 }
+    );
+
     // Floor
-    const floor = Matter.Bodies.rectangle(width/2, height + 10, width, 40, { isStatic: true });
+    const floor = Matter.Bodies.rectangle(width/2, height + 20, width, 40, { isStatic: true, friction: 0 });
 
     Matter.World.add(world, [
         ...pegs,
         ...bins,
         funnelLeft,
         funnelRight,
-        wallLeft,
-        wallRight,
+        leftWall,
+        rightWall,
+        leftBinWall,
+        rightBinWall,
         floor
     ]);
   };
@@ -280,13 +370,15 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const patternIndex = ballsDroppedRef.current % ballPattern.length;
     const colorObj = ballPattern[patternIndex] || ballPattern[0];
     
-    // Small jitter to prevent perfect stacking
-    const jitter = (Math.random() - 0.5) * 4; 
+    // Jitter within the funnel spawn area
+    // Ensure jitter is small enough so balls don't spawn inside the walls
+    const jitter = (Math.random() - 0.5) * (ballSize); 
     
     // Spawn above the funnel
-    const ball = Matter.Bodies.circle(width / 2 + jitter, -30, ballSize, {
+    const ball = Matter.Bodies.circle(width / 2 + jitter, -20, ballSize, {
       restitution: ballRestitution,
-      friction: 0.001,
+      friction: 0, // Zero friction
+      frictionAir: 0.02,
       density: 0.004,
       render: {
         fillStyle: colorObj.color
