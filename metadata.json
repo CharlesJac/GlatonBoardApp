@@ -1,0 +1,5 @@
+{
+  "name": "Galton Board Sim",
+  "description": "A physics-based Galton Board simulation to demonstrate probability distributions with customizable parameters and colored balls.",
+  "requestFramePermissions": []
+}
