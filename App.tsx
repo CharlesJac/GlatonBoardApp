@@ -157,16 +157,16 @@ const App: React.FC = () => {
         
         <div className="flex items-center gap-3">
           
-          {/* 1. Fill Button (Incremental) */}
+          {/* 1. Add balls Button (Incremental) */}
           <button
             onClick={handleFill}
             // Always enabled unless we decide otherwise. Usually Fill is allowed whenever.
             className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-indigo-600 hover:bg-indigo-50 rounded-md font-medium transition-colors shadow-sm active:translate-y-0.5"
           >
-            <PlusCircle className="w-4 h-4" /> Fill
+            <PlusCircle className="w-4 h-4" /> Add balls
           </button>
 
-          {/* 2. Release/Close Button (Switch) */}
+          {/* 2. Open/Close Button (Switch) */}
           <button
             onClick={handleRelease}
             className={`flex items-center gap-2 px-4 py-2 text-white rounded-md font-medium shadow-sm transition-colors w-32 justify-center ${
@@ -181,7 +181,7 @@ const App: React.FC = () => {
                 </>
             ) : (
                 <>
-                    <Unlock className="w-4 h-4" /> Release
+                    <Unlock className="w-4 h-4" /> Open
                 </>
             )}
           </button>

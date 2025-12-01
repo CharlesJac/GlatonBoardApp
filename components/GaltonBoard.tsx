@@ -26,14 +26,23 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   resetTrigger,
   isGateOpen
 }) => {
-  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Two canvases: One for static elements (pegs/walls), one for dynamic (balls/gates)
+  const staticCanvasRef = useRef<HTMLCanvasElement>(null);
+  const dynamicCanvasRef = useRef<HTMLCanvasElement>(null);
+
   const engineRef = useRef<Matter.Engine | null>(null);
-  const renderRef = useRef<Matter.Render | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
   
   // Gate Refs
   const leftGateRef = useRef<Matter.Body | null>(null);
   const rightGateRef = useRef<Matter.Body | null>(null);
+  
+  // Optimization Refs
+  const ballsRef = useRef<Matter.Body[]>([]); // Direct access to ball bodies to avoid world filtering
+  const spriteCacheRef = useRef<Record<string, HTMLCanvasElement>>({}); // Pre-rendered sprites
+  const layoutRef = useRef<any>(null); // Cached layout metrics
   
   // State Refs for Loop Access
   const isGateOpenRef = useRef(isGateOpen);
@@ -42,85 +51,33 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   const animationFrameRef = useRef<number>(0);
   const onCompleteRef = useRef(onComplete);
 
+  // Track bodies for custom rendering
+  const staticBodiesRef = useRef<Matter.Body[]>([]);
+
+  // FPS and Stats Tracking
+  const [fps, setFps] = useState(0);
+  const [activeBallCount, setActiveBallCount] = useState(0);
+  const fpsRef = useRef({ startTime: 0, frameCount: 0 });
+  const lastStateUpdateRef = useRef(0);
+
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
 
   useEffect(() => {
     isGateOpenRef.current = isGateOpen;
+    
+    // Initial wake up signal when gate opens
+    if (isGateOpen && engineRef.current) {
+        // Use the optimized ref
+        const balls = ballsRef.current;
+        for (const body of balls) {
+             Matter.Sleeping.set(body, false);
+        }
+    }
   }, [isGateOpen]);
   
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-
-  // Initialize Physics Engine
-  useEffect(() => {
-    if (!canvasContainerRef.current) return;
-
-    const width = canvasContainerRef.current.clientWidth;
-    const height = canvasContainerRef.current.clientHeight;
-
-    const engine = Matter.Engine.create({
-      gravity: { x: 0, y: 1, scale: 0.001 }
-    });
-    engineRef.current = engine;
-
-    const render = Matter.Render.create({
-      element: canvasContainerRef.current,
-      engine: engine,
-      options: {
-        width: width,
-        height: height,
-        wireframes: false,
-        background: '#eaddcf', // Cork-like background
-        pixelRatio: window.devicePixelRatio,
-      }
-    });
-    renderRef.current = render;
-
-    const runner = Matter.Runner.create();
-    runnerRef.current = runner;
-
-    Matter.Render.run(render);
-    Matter.Runner.run(runner, engine);
-
-    setDimensions({ width, height });
-
-    const resizeObserver = new ResizeObserver(() => {
-        if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-        
-        resizeTimeoutRef.current = setTimeout(() => {
-            if (!canvasContainerRef.current || !renderRef.current) return;
-            const newWidth = canvasContainerRef.current.clientWidth;
-            const newHeight = canvasContainerRef.current.clientHeight;
-            
-            if (newWidth === 0 || newHeight === 0) return;
-      
-            const render = renderRef.current;
-            render.bounds.max.x = newWidth;
-            render.bounds.max.y = newHeight;
-            render.options.width = newWidth;
-            render.options.height = newHeight;
-            
-            render.canvas.width = newWidth * window.devicePixelRatio;
-            render.canvas.height = newHeight * window.devicePixelRatio;
-            render.canvas.style.width = `${newWidth}px`;
-            render.canvas.style.height = `${newHeight}px`;
-      
-            setDimensions({ width: newWidth, height: newHeight });
-        }, 100); 
-    });
-
-    resizeObserver.observe(canvasContainerRef.current);
-
-    return () => {
-      resizeObserver.disconnect();
-      Matter.Render.stop(render);
-      Matter.Runner.stop(runner);
-      if (render.canvas) render.canvas.remove();
-      Matter.World.clear(engine.world, false);
-      Matter.Engine.clear(engine);
-    };
-  }, []);
 
   // Helper to calculate consistent layout metrics
   const getLayoutMetrics = (width: number, height: number, cfg: SimulationConfig) => {
@@ -165,10 +122,119 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     };
   };
 
+  // Update cached layout when dimensions or config change
+  useEffect(() => {
+      if (dimensions.width > 0) {
+          layoutRef.current = getLayoutMetrics(dimensions.width, dimensions.height, config);
+      }
+  }, [dimensions, config]);
+
+  // Generate Sprites for GPU Optimized Rendering
+  useEffect(() => {
+      const pixelRatio = window.devicePixelRatio || 1;
+      const radius = config.ballSize;
+      const size = (radius * 2) + 2; // +2 for antialiasing padding
+      const newCache: Record<string, HTMLCanvasElement> = {};
+      
+      // Get unique colors from the queue and defaults to be safe
+      const colors = new Set<string>();
+      ballQueue.forEach(b => colors.add(b.color));
+      
+      colors.forEach(color => {
+          const c = document.createElement('canvas');
+          c.width = size * pixelRatio;
+          c.height = size * pixelRatio;
+          const ctx = c.getContext('2d');
+          if (ctx) {
+              ctx.scale(pixelRatio, pixelRatio);
+              ctx.beginPath();
+              // Center the circle in the sprite
+              ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2);
+              ctx.fillStyle = color;
+              ctx.fill();
+          }
+          newCache[color] = c;
+      });
+      
+      spriteCacheRef.current = newCache;
+  }, [config.ballSize, ballQueue]);
+
+  // Initialize Physics Engine
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    // OPTIMIZATION: Enable Sleeping
+    const engine = Matter.Engine.create({
+      enableSleeping: true, 
+      gravity: { x: 0, y: 1, scale: 0.001 }
+    });
+    engineRef.current = engine;
+
+    const runner = Matter.Runner.create();
+    runnerRef.current = runner;
+
+    // Start the physics runner
+    Matter.Runner.run(runner, engine);
+
+    // Initial sizing
+    const width = containerRef.current.clientWidth;
+    const height = containerRef.current.clientHeight;
+    setDimensions({ width, height });
+
+    const resizeObserver = new ResizeObserver(() => {
+        if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+        
+        // Debounce resize
+        resizeTimeoutRef.current = setTimeout(() => {
+            if (!containerRef.current) return;
+            const newWidth = containerRef.current.clientWidth;
+            const newHeight = containerRef.current.clientHeight;
+            
+            if (newWidth === 0 || newHeight === 0) return;
+            setDimensions({ width: newWidth, height: newHeight });
+        }, 100); 
+    });
+
+    resizeObserver.observe(containerRef.current);
+
+    return () => {
+      resizeObserver.disconnect();
+      Matter.Runner.stop(runner);
+      Matter.World.clear(engine.world, false);
+      Matter.Engine.clear(engine);
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    };
+  }, []);
+
+  // Sync Canvas Sizes to State
+  useEffect(() => {
+      if (dimensions.width === 0) return;
+      
+      const pixelRatio = window.devicePixelRatio || 1;
+      
+      [staticCanvasRef.current, dynamicCanvasRef.current].forEach(canvas => {
+          if (canvas) {
+              canvas.width = dimensions.width * pixelRatio;
+              canvas.height = dimensions.height * pixelRatio;
+              canvas.style.width = `${dimensions.width}px`;
+              canvas.style.height = `${dimensions.height}px`;
+              
+              const ctx = canvas.getContext('2d');
+              if (ctx) ctx.scale(pixelRatio, pixelRatio);
+          }
+      });
+
+      // Re-draw static elements whenever dimensions change
+      if (engineRef.current) {
+          drawStaticLayer();
+      }
+      
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimensions]);
 
   // --- Event Listeners for Triggers ---
 
-  // 1. Reset Trigger: Rebuild Static Board (clears balls)
+  // 1. Reset Trigger: Rebuild Static Board
   useEffect(() => {
       if (dimensions.width === 0) return;
       setupStaticBoard();
@@ -183,24 +249,127 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fillTrigger]);
 
-  // 3. Gate Trigger is now handled in the loop via refs for animation
+  
+  // --- CUSTOM RENDERING LOGIC ---
 
+  const drawStaticLayer = () => {
+    const canvas = staticCanvasRef.current;
+    if (!canvas || !engineRef.current) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    // Clear
+    ctx.clearRect(0, 0, canvas.width / window.devicePixelRatio, canvas.height / window.devicePixelRatio);
+    
+    // Draw all static bodies
+    staticBodiesRef.current.forEach(body => {
+        ctx.beginPath();
+        if (body.label === 'peg') {
+             const r = body.circleRadius || config.pegSize;
+             ctx.arc(body.position.x, body.position.y, r, 0, 2 * Math.PI);
+             ctx.fillStyle = '#334155';
+             ctx.fill();
+        } else if (body.label === 'funnel') {
+             ctx.fillStyle = '#d97706';
+             ctx.strokeStyle = '#b45309';
+             ctx.lineWidth = 1;
+             
+             if (body.vertices && body.vertices.length > 0) {
+                 ctx.moveTo(body.vertices[0].x, body.vertices[0].y);
+                 for (let j = 1; j < body.vertices.length; j++) {
+                     ctx.lineTo(body.vertices[j].x, body.vertices[j].y);
+                 }
+                 ctx.closePath();
+                 ctx.fill();
+                 ctx.stroke();
+             }
+        } else if (body.label === 'bin' || body.label === 'floor') {
+             // Treat as vertices polygon
+             ctx.fillStyle = body.label === 'bin' ? '#cbd5e1' : 'transparent';
+             if (body.vertices && body.vertices.length > 0) {
+                 ctx.moveTo(body.vertices[0].x, body.vertices[0].y);
+                 for (let j = 1; j < body.vertices.length; j++) {
+                     ctx.lineTo(body.vertices[j].x, body.vertices[j].y);
+                 }
+                 ctx.closePath();
+                 ctx.fill();
+             }
+        }
+    });
+  };
 
-  // Setup Static Board (Funnel, Pegs, Bins, Gate)
+  const drawDynamicLayer = () => {
+      const canvas = dynamicCanvasRef.current;
+      if (!canvas || !engineRef.current) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Clear
+      const w = dimensions.width;
+      const h = dimensions.height;
+      ctx.clearRect(0, 0, w, h);
+
+      // 1. Draw Gates (Black)
+      ctx.fillStyle = '#000000';
+      ctx.beginPath();
+      
+      const drawBody = (b: Matter.Body | null) => {
+        if (b && b.vertices) {
+            ctx.moveTo(b.vertices[0].x, b.vertices[0].y);
+            for (let j = 1; j < b.vertices.length; j++) ctx.lineTo(b.vertices[j].x, b.vertices[j].y);
+        }
+      };
+
+      drawBody(leftGateRef.current);
+      drawBody(rightGateRef.current);
+      ctx.fill();
+
+      // 2. Draw Balls using Cached Sprites (GPU Optimized)
+      // Use the direct ballsRef to avoid filtering all world bodies
+      const balls = ballsRef.current;
+      const spriteSize = (config.ballSize * 2) + 2;
+      const spriteOffset = spriteSize / 2;
+
+      for (let i = 0; i < balls.length; i++) {
+          const ball = balls[i];
+          const color = ball.render.fillStyle as string;
+          const sprite = spriteCacheRef.current[color];
+          
+          if (sprite) {
+              // drawImage is extremely fast on GPU
+              // Rounding positions can help crispness, but let's stick to sub-pixel for physics smoothness
+              ctx.drawImage(sprite, ball.position.x - spriteOffset, ball.position.y - spriteOffset, spriteSize, spriteSize);
+          } else {
+              // Fallback if sprite missing (should not happen)
+              ctx.fillStyle = color;
+              ctx.beginPath();
+              ctx.arc(ball.position.x, ball.position.y, config.ballSize, 0, 2 * Math.PI);
+              ctx.fill();
+          }
+      }
+  };
+
+  // --- Board Setup Logic ---
+
   const setupStaticBoard = () => {
-    if (!engineRef.current || !canvasContainerRef.current) return;
+    if (!engineRef.current || dimensions.width === 0) return;
     
     const world = engineRef.current.world;
     Matter.World.clear(world, false); // Keep engine, clear bodies
+    
+    staticBodiesRef.current = [];
+    ballsRef.current = []; // Clear direct ball reference
+    setFps(0);
+    setActiveBallCount(0);
 
-    const width = canvasContainerRef.current.clientWidth;
-    const height = canvasContainerRef.current.clientHeight;
+    const width = dimensions.width;
+    const height = dimensions.height;
     
     const layout = getLayoutMetrics(width, height, config);
     const { funnelTipY, pegStartY, binStartY, binHeight, spacingX, spacingY } = layout;
 
     const { rowCount, bucketCount, pegSize, ballSize } = config;
-    const woodRender = { fillStyle: '#d97706', strokeStyle: '#b45309', lineWidth: 1 };
 
     // --- Funnel ---
     const gap = ballSize * 4;
@@ -211,45 +380,40 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const leftVerts = [{ x: 0, y: 0 }, { x: tipXLeft, y: funnelTipY }, { x: 0, y: funnelTipY }];
     const leftCentroid = { x: (0 + tipXLeft + 0) / 3, y: (0 + funnelTipY + funnelTipY) / 3 };
     const funnelLeft = Matter.Bodies.fromVertices(leftCentroid.x, leftCentroid.y, [leftVerts], {
-        isStatic: true, render: woodRender, friction: 0, restitution: 0
+        isStatic: true, label: 'funnel', friction: 0, restitution: 0
     });
 
     const rightVerts = [{ x: width, y: 0 }, { x: width, y: funnelTipY }, { x: tipXRight, y: funnelTipY }];
     const rightCentroid = { x: (width + width + tipXRight) / 3, y: (0 + funnelTipY + funnelTipY) / 3 };
     const funnelRight = Matter.Bodies.fromVertices(rightCentroid.x, rightCentroid.y, [rightVerts], {
-        isStatic: true, render: woodRender, friction: 0, restitution: 0
+        isStatic: true, label: 'funnel', friction: 0, restitution: 0
     });
 
     // --- Sliding Gates ---
-    // Width needs to cover half the gap plus overlap to slide under funnel
     const gateOverlap = 30;
-    const centerOverlap = 5; // Overlap at the center to prevent leaks
+    const centerOverlap = 5; 
     const gateWidth = (gap / 2) + gateOverlap; 
     const gateHeight = 14;
-    // Position gate at the funnel tip level so it physically overlaps vertically
     const gateY = funnelTipY; 
 
     // Initial Positions (Closed)
-    // Left gate right edge at center + centerOverlap
     const leftGateX = (width / 2) - (gateWidth / 2) + centerOverlap;
-    // Right gate left edge at center - centerOverlap
     const rightGateX = (width / 2) + (gateWidth / 2) - centerOverlap;
 
     const leftGate = Matter.Bodies.rectangle(leftGateX, gateY, gateWidth, gateHeight, {
-        isStatic: true,
+        isStatic: true, label: 'gate',
         render: { fillStyle: '#000000' },
         friction: 0.1
     });
     
     const rightGate = Matter.Bodies.rectangle(rightGateX, gateY, gateWidth, gateHeight, {
-        isStatic: true,
+        isStatic: true, label: 'gate',
         render: { fillStyle: '#000000' },
         friction: 0.1
     });
 
     leftGateRef.current = leftGate;
     rightGateRef.current = rightGate;
-
 
     // --- Pegs ---
     const pegs: Matter.Body[] = [];
@@ -267,7 +431,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
         const x = width / 2 + xOffset;
         if (x > -20 && x < width + 20) {
              const circle = Matter.Bodies.circle(x, y, pegSize, {
-                isStatic: true, friction: 0, render: { fillStyle: '#334155' }
+                isStatic: true, label: 'peg', friction: 0
               });
               pegs.push(circle);
         }
@@ -284,24 +448,32 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     for (let i = 0; i <= bucketCount; i++) {
         const divX = binAreaStartX + (i * spacingX);
         const divider = Matter.Bodies.rectangle(divX, binCenterY, 4, validBinHeight, { 
-                isStatic: true, render: { fillStyle: '#cbd5e1' }, chamfer: { radius: 2 }, friction: 0
+                isStatic: true, label: 'bin', chamfer: { radius: 2 }, friction: 0
         });
         bins.push(divider);
     }
     
-    const floor = Matter.Bodies.rectangle(width/2, height + 50, width * 2, 100, { isStatic: true, friction: 0 });
+    const floor = Matter.Bodies.rectangle(width/2, height + 50, width * 2, 100, { isStatic: true, label: 'floor', friction: 0 });
 
-    const bodiesToAdd = [...pegs, ...bins, funnelLeft, funnelRight, floor, leftGate, rightGate];
+    const staticBodies = [...pegs, ...bins, funnelLeft, funnelRight, floor];
+    staticBodiesRef.current = staticBodies;
+
+    Matter.World.add(world, [...staticBodies, leftGate, rightGate]);
     
-    Matter.World.add(world, bodiesToAdd);
+    // Trigger static draw
+    drawStaticLayer();
+    // Clear dynamic layer (fix for Reset)
+    drawDynamicLayer();
   };
 
-  // Spawn Balls (Incremental)
+  // Spawn Balls
   const spawnBalls = () => {
-      if (!engineRef.current || !canvasContainerRef.current) return;
-      const width = canvasContainerRef.current.clientWidth;
-      const height = canvasContainerRef.current.clientHeight;
-      const layout = getLayoutMetrics(width, height, config);
+      if (!engineRef.current || dimensions.width === 0) return;
+      const width = dimensions.width;
+      const height = dimensions.height;
+      
+      // Use ref if available, else calc
+      const layout = layoutRef.current || getLayoutMetrics(width, height, config);
       const { funnelTipY } = layout;
       const { ballSize } = config;
 
@@ -309,9 +481,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       const ballSpacing = ballBodyRadius * 2.2;
       const ballsPerRow = Math.max(1, Math.floor(width / ballSpacing) - 2); 
 
-      // Spread balls loosely above the funnel
-      const balls = ballQueue.map((color, i) => {
-            // Randomize slightly to prevent stacking towers that don't fall
+      const newBalls = ballQueue.map((color, i) => {
             const col = i % ballsPerRow;
             const row = Math.floor(i / ballsPerRow);
             
@@ -319,20 +489,22 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
             const startX = (width - rowWidth) / 2;
             
             const x = startX + (col * ballSpacing) + (Math.random() - 0.5) * 6;
-            // Spawn higher up
             const y = funnelTipY - 50 - (row * ballSpacing * 1.1) - (Math.random() * 50);
 
             return Matter.Bodies.circle(x, y, ballSize, {
                 label: 'ball',
                 restitution: 0, 
                 friction: 0,
-                frictionAir: 0.02,
+                frictionAir: 0.005, // LOW AIR FRICTION for better flow
                 density: 0.004,
+                sleepThreshold: 30, // Default is 60, lower means they sleep sooner
                 render: { fillStyle: color.color }
             });
         });
-
-      Matter.World.add(engineRef.current.world, balls);
+      
+      // Update persistent ref
+      ballsRef.current = [...ballsRef.current, ...newBalls];
+      Matter.World.add(engineRef.current.world, newBalls);
   };
 
   // Simulation Loop
@@ -342,28 +514,46 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
         return;
     }
 
-    const loop = () => {
+    const loop = (time: number) => {
       if (status !== 'running') return;
 
+      // FPS Calc
+      if (time - fpsRef.current.startTime > 500) {
+          const delta = time - fpsRef.current.startTime;
+          const frames = fpsRef.current.frameCount;
+          const currentFps = Math.round((frames / delta) * 1000);
+          
+          if (time - lastStateUpdateRef.current > 500) {
+              setFps(currentFps);
+              lastStateUpdateRef.current = time;
+          }
+          
+          fpsRef.current.startTime = time;
+          fpsRef.current.frameCount = 0;
+      }
+      fpsRef.current.frameCount++;
+
+
       if (engineRef.current && dimensions.width > 0) {
-         const layout = getLayoutMetrics(dimensions.width, dimensions.height, config);
+         drawDynamicLayer();
+
+         // OPTIMIZATION: Use cached layout
+         const layout = layoutRef.current || getLayoutMetrics(dimensions.width, dimensions.height, config);
          
          // --- Gate Animation ---
          if (leftGateRef.current && rightGateRef.current) {
              const isOpen = isGateOpenRef.current;
              const gap = config.ballSize * 4;
              const gateOverlap = 30; 
-             const centerOverlap = 5; // Must match static setup to align
+             const centerOverlap = 5;
              const gateWidth = (gap / 2) + gateOverlap;
              const width = dimensions.width;
              const center = width / 2;
              
              // Targets
-             // Closed: Shifted inwards by centerOverlap for tight seal
              const closedLeftX = center - (gateWidth / 2) + centerOverlap;
              const closedRightX = center + (gateWidth / 2) - centerOverlap;
              
-             // Open: Slide out
              const slideDist = gateWidth + 5;
              const openLeftX = closedLeftX - slideDist;
              const openRightX = closedRightX + slideDist;
@@ -374,7 +564,6 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
              const currentLeft = leftGateRef.current.position.x;
              const currentRight = rightGateRef.current.position.x;
              
-             // Lerp factor
              const t = 0.2;
              
              const newLeftX = currentLeft + (targetLeftX - currentLeft) * t;
@@ -386,21 +575,62 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
 
 
          // --- Ball Physics Adjustments ---
-         const balls = Matter.Composite.allBodies(engineRef.current.world).filter(b => b.label === 'ball');
+         // OPTIMIZATION: Iterate persistent array
+         const balls = ballsRef.current;
+         let activeCount = 0;
+         let totalBalls = balls.length;
          
-         balls.forEach(ball => {
-             if (ball.position.y < layout.funnelTipY + 10) {
-                 ball.restitution = 0;
-             } else if (ball.position.y > layout.binStartY - 10) {
-                 ball.restitution = 0;
-             } else {
-                 ball.restitution = config.ballRestitution;
-             }
-         });
+         // Pre-calculate constants for loop
+         const binLimit = layout.binStartY - 10;
+         const funnelLimit = layout.funnelTipY + 10;
+         const restitution = config.ballRestitution;
+         const gateOpen = isGateOpenRef.current;
+         const binStartY = layout.binStartY;
 
-         if (balls.length > 0) {
-             const allSettled = balls.every(b => b.speed < 0.15 && b.angularSpeed < 0.1 && b.position.y > layout.binStartY);
-             if (allSettled) onCompleteRef.current();
+         for (let i = 0; i < totalBalls; i++) {
+             const ball = balls[i];
+             
+             // CRITICAL: Force wake up balls if the gate is open and they are above the bins
+             if (gateOpen && ball.position.y < binStartY) {
+                 if (ball.isSleeping) {
+                     Matter.Sleeping.set(ball, false);
+                 }
+             }
+
+             if (ball.isSleeping) continue;
+             
+             activeCount++;
+             
+             const y = ball.position.y;
+
+             if (y < funnelLimit) {
+                 if (ball.restitution !== 0) ball.restitution = 0;
+             } else if (y > binLimit) {
+                 if (ball.restitution !== 0) ball.restitution = 0;
+             } else {
+                 if (ball.restitution !== restitution) ball.restitution = restitution;
+             }
+         }
+         
+         // Sync active count periodically
+         if (time - lastStateUpdateRef.current < 50) { 
+            // piggyback on the FPS timer check above, but here we can just update a ref if needed. 
+            // For now, we update state inside the FPS block or periodically.
+            // Let's do it simply:
+         }
+         if (time - lastStateUpdateRef.current < 10) { 
+             // Just updated in FPS block
+             setActiveBallCount(activeCount);
+         }
+
+         if (totalBalls > 0) {
+             if (activeCount === 0 && totalBalls === config.ballCount) {
+                  onCompleteRef.current();
+             } else {
+                 if (activeCount === 0) {
+                     onCompleteRef.current();
+                 }
+             }
          }
       }
       animationFrameRef.current = requestAnimationFrame(loop);
@@ -445,11 +675,19 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   };
 
   return (
-    <div className="w-full h-full relative bg-white isolate">
-       <div ref={canvasContainerRef} className="absolute inset-0 z-0 cursor-crosshair" />
+    <div className="w-full h-full relative bg-[#eaddcf] isolate overflow-hidden" ref={containerRef}>
+       <canvas 
+         ref={staticCanvasRef} 
+         className="absolute inset-0 z-0 pointer-events-none" 
+       />
+       <canvas 
+         ref={dynamicCanvasRef} 
+         className="absolute inset-0 z-1 pointer-events-none" 
+       />
        {renderLabels()}
-       <div className="absolute top-2 left-2 text-xs text-slate-500 font-mono pointer-events-none select-none z-10 font-bold">
-          Balls: {config.ballCount}
+       <div className="absolute top-2 left-2 text-xs text-slate-600 font-mono pointer-events-none select-none z-20 font-bold bg-white/80 p-2 rounded backdrop-blur-sm border border-white/50 shadow-sm">
+          <div>FPS: {fps}</div>
+          <div>Balls: {activeBallCount} / {ballsRef.current.length}</div>
        </div>
     </div>
   );
