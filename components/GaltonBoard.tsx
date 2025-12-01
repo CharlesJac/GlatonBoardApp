@@ -83,37 +83,42 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   const getLayoutMetrics = (width: number, height: number, cfg: SimulationConfig) => {
     const { rowCount, bucketCount } = cfg;
     const topMargin = 10;
-    const funnelHeight = Math.max(70, height * 0.15);
-    const gap = funnelHeight * 1.2; 
     
-    const targetSpacingX = width / bucketCount;
-    const targetSpacingY = targetSpacingX * 0.6; 
-    const targetPegBlockHeight = (rowCount - 1) * targetSpacingY;
+    const funnelSlopeHeight = Math.max(70, height * 0.15);
+    const funnelNeckHeight = 40; // EXTENDED: Vertical channel to straighten balls for normal distribution
+    const funnelExitY = funnelSlopeHeight + funnelNeckHeight;
     
-    const usedHeightPreBin = funnelHeight + topMargin + gap + targetPegBlockHeight;
-    const remainingForBins = height - usedHeightPreBin;
+    const gap = 30; // Gap between funnel exit and first peg
+    
+    // NEW LOGIC: Always fill the full width of the container
+    const spacingX = width / bucketCount;
+    
+    // Ideal vertical spacing based on ratio (0.75 for better clearance)
+    const idealSpacingY = spacingX * 0.75; 
+    
+    // Calculate available vertical space for the peg block
     const minViableBinHeight = Math.max(150, height * 0.3);
-
-    let spacingX, spacingY;
-
-    if (remainingForBins >= minViableBinHeight) {
-        spacingX = targetSpacingX;
-        spacingY = targetSpacingY;
-    } else {
-        const maxAvailablePegHeight = height - funnelHeight - topMargin - gap - minViableBinHeight;
-        spacingY = maxAvailablePegHeight / (rowCount - 1);
-        spacingX = spacingY / 0.6; 
+    const availableHeightForPegs = height - funnelExitY - topMargin - gap - minViableBinHeight;
+    
+    let spacingY = idealSpacingY;
+    const requiredHeight = (rowCount - 1) * spacingY;
+    
+    // If the ideal layout doesn't fit vertically, squash the vertical spacing
+    if (requiredHeight > availableHeightForPegs) {
+        spacingY = Math.max(10, availableHeightForPegs / (rowCount - 1));
     }
     
     const finalPegBlockHeight = (rowCount - 1) * spacingY;
-    const funnelTipY = funnelHeight;
-    const pegStartY = funnelTipY + gap;
+    
+    // Use funnelSlopeHeight for where the angle ends, but exit is lower
+    const pegStartY = funnelExitY + gap;
     const binStartY = pegStartY + finalPegBlockHeight + (spacingY * 0.5);
     const realBinHeight = Math.max(0, height - binStartY);
 
     return {
-        funnelHeight,
-        funnelTipY,
+        funnelSlopeHeight,
+        funnelNeckHeight,
+        funnelExitY,
         pegStartY,
         binStartY,
         binHeight: realBinHeight,
@@ -367,25 +372,45 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const height = dimensions.height;
     
     const layout = getLayoutMetrics(width, height, config);
-    const { funnelTipY, pegStartY, binStartY, binHeight, spacingX, spacingY } = layout;
+    const { funnelSlopeHeight, funnelNeckHeight, funnelExitY, pegStartY, binStartY, binHeight, spacingX, spacingY } = layout;
 
     const { rowCount, bucketCount, pegSize, ballSize } = config;
 
     // --- Funnel ---
-    const gap = ballSize * 4;
+    // STRICT SINGLE FILE GAP for Normal Distribution
+    // Gap needs to be just slightly larger than 1 ball diameter (2 * radius)
+    // Ball diam = 2 * ballSize. Gap = 2.2 * 2 * ballSize approx?
+    const gap = Math.max(ballSize * 2.2, 5); 
+
     const halfWidth = width / 2;
     const tipXLeft = halfWidth - gap / 2;
     const tipXRight = halfWidth + gap / 2;
 
-    const leftVerts = [{ x: 0, y: 0 }, { x: tipXLeft, y: funnelTipY }, { x: 0, y: funnelTipY }];
-    const leftCentroid = { x: (0 + tipXLeft + 0) / 3, y: (0 + funnelTipY + funnelTipY) / 3 };
-    const funnelLeft = Matter.Bodies.fromVertices(leftCentroid.x, leftCentroid.y, [leftVerts], {
+    // Merge Slope and Neck into single bodies to prevent cracks where balls get stuck.
+    
+    // Left Wall Body (Polygon)
+    // Vertices order: Top-Left -> Slope-Corner -> Neck-Bottom -> Wall-Bottom
+    const leftVerts = [
+        { x: 0, y: 0 }, 
+        { x: tipXLeft, y: funnelSlopeHeight }, 
+        { x: tipXLeft, y: funnelExitY }, 
+        { x: 0, y: funnelExitY }
+    ];
+    // Calculate centroid manually to ensure correct absolute positioning with fromVertices
+    const leftCentre = Matter.Vertices.centre(leftVerts);
+    const funnelLeft = Matter.Bodies.fromVertices(leftCentre.x, leftCentre.y, [leftVerts], {
         isStatic: true, label: 'funnel', friction: 0, restitution: 0
     });
 
-    const rightVerts = [{ x: width, y: 0 }, { x: width, y: funnelTipY }, { x: tipXRight, y: funnelTipY }];
-    const rightCentroid = { x: (width + width + tipXRight) / 3, y: (0 + funnelTipY + funnelTipY) / 3 };
-    const funnelRight = Matter.Bodies.fromVertices(rightCentroid.x, rightCentroid.y, [rightVerts], {
+    // Right Wall Body (Polygon)
+    const rightVerts = [
+        { x: width, y: 0 }, 
+        { x: width, y: funnelExitY }, 
+        { x: tipXRight, y: funnelExitY }, 
+        { x: tipXRight, y: funnelSlopeHeight }
+    ];
+    const rightCentre = Matter.Vertices.centre(rightVerts);
+    const funnelRight = Matter.Bodies.fromVertices(rightCentre.x, rightCentre.y, [rightVerts], {
         isStatic: true, label: 'funnel', friction: 0, restitution: 0
     });
 
@@ -394,7 +419,8 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     const centerOverlap = 5; 
     const gateWidth = (gap / 2) + gateOverlap; 
     const gateHeight = 14;
-    const gateY = funnelTipY; 
+    // Position gate at the exit of the neck
+    const gateY = funnelExitY; 
 
     // Initial Positions (Closed)
     const leftGateX = (width / 2) - (gateWidth / 2) + centerOverlap;
@@ -431,7 +457,10 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
         const x = width / 2 + xOffset;
         if (x > -20 && x < width + 20) {
              const circle = Matter.Bodies.circle(x, y, pegSize, {
-                isStatic: true, label: 'peg', friction: 0
+                isStatic: true, 
+                label: 'peg', 
+                friction: 0.001, // Slight friction to aid rolling
+                restitution: config.ballRestitution
               });
               pegs.push(circle);
         }
@@ -474,7 +503,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       
       // Use ref if available, else calc
       const layout = layoutRef.current || getLayoutMetrics(width, height, config);
-      const { funnelTipY } = layout;
+      const { funnelSlopeHeight } = layout;
       const { ballSize } = config;
 
       const ballBodyRadius = ballSize;
@@ -488,14 +517,15 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
             const rowWidth = ballsPerRow * ballSpacing;
             const startX = (width - rowWidth) / 2;
             
+            // Spawn above the funnel slope
             const x = startX + (col * ballSpacing) + (Math.random() - 0.5) * 6;
-            const y = funnelTipY - 50 - (row * ballSpacing * 1.1) - (Math.random() * 50);
+            const y = funnelSlopeHeight - 50 - (row * ballSpacing * 1.1) - (Math.random() * 50);
 
             return Matter.Bodies.circle(x, y, ballSize, {
                 label: 'ball',
                 restitution: 0, 
-                friction: 0,
-                frictionAir: 0.005, // LOW AIR FRICTION for better flow
+                friction: config.ballFriction, // Configurable Friction
+                frictionAir: 0.005, 
                 density: 0.004,
                 sleepThreshold: 30, // Default is 60, lower means they sleep sooner
                 render: { fillStyle: color.color }
@@ -543,7 +573,10 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
          // --- Gate Animation ---
          if (leftGateRef.current && rightGateRef.current) {
              const isOpen = isGateOpenRef.current;
-             const gap = config.ballSize * 4;
+             // Gap matches static setup logic for water tight seal
+             const ballSize = config.ballSize;
+             const gap = Math.max(ballSize * 2.2, 5);
+             
              const gateOverlap = 30; 
              const centerOverlap = 5;
              const gateWidth = (gap / 2) + gateOverlap;
@@ -582,8 +615,9 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
          
          // Pre-calculate constants for loop
          const binLimit = layout.binStartY - 10;
-         const funnelLimit = layout.funnelTipY + 10;
+         const funnelLimit = layout.funnelExitY + 10;
          const restitution = config.ballRestitution;
+         const friction = config.ballFriction;
          const gateOpen = isGateOpenRef.current;
          const binStartY = layout.binStartY;
 
@@ -596,6 +630,11 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
                      Matter.Sleeping.set(ball, false);
                  }
              }
+             
+             // Dynamic Friction update
+             if (ball.friction !== friction) {
+                 ball.friction = friction;
+             }
 
              if (ball.isSleeping) continue;
              
@@ -603,23 +642,22 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
              
              const y = ball.position.y;
 
+             // Reduce bounce in funnel and bins
              if (y < funnelLimit) {
-                 if (ball.restitution !== 0) ball.restitution = 0;
+                 if (ball.restitution !== 0.1) ball.restitution = 0.1; // Small damping
              } else if (y > binLimit) {
                  if (ball.restitution !== 0) ball.restitution = 0;
              } else {
                  if (ball.restitution !== restitution) ball.restitution = restitution;
              }
+             
+             // Anti-jamming: slight noise for almost stopped balls in funnel
+             if (gateOpen && y < funnelLimit && ball.speed < 0.1 && Math.random() < 0.05) {
+                 Matter.Body.applyForce(ball, ball.position, { x: (Math.random() - 0.5) * 0.0001, y: 0 });
+             }
          }
          
-         // Sync active count periodically
-         if (time - lastStateUpdateRef.current < 50) { 
-            // piggyback on the FPS timer check above, but here we can just update a ref if needed. 
-            // For now, we update state inside the FPS block or periodically.
-            // Let's do it simply:
-         }
          if (time - lastStateUpdateRef.current < 10) { 
-             // Just updated in FPS block
              setActiveBallCount(activeCount);
          }
 

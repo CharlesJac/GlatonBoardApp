@@ -8,12 +8,13 @@ import { SimulationConfig, BallColor, DEFAULT_COLORS, SimulationStatus, BallDefi
 const App: React.FC = () => {
   const [status, setStatus] = useState<SimulationStatus>('empty');
   const [config, setConfig] = useState<SimulationConfig>({
-    rowCount: 6,
+    rowCount: 8,
     ballCount: 2000, 
-    bucketCount: 22, 
-    pegSize: 4,
+    bucketCount: 16, 
+    pegSize: 7,
     ballSize: 2,
     ballRestitution: 0.5,
+    ballFriction: 0.001,
     dropSpeedMs: 50,
   });
 
@@ -162,6 +163,7 @@ const App: React.FC = () => {
             onClick={handleFill}
             // Always enabled unless we decide otherwise. Usually Fill is allowed whenever.
             className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-indigo-600 hover:bg-indigo-50 rounded-md font-medium transition-colors shadow-sm active:translate-y-0.5"
+            title="Spawn more balls into the funnel"
           >
             <PlusCircle className="w-4 h-4" /> Add balls
           </button>
@@ -174,6 +176,7 @@ const App: React.FC = () => {
                 ? 'bg-amber-500 hover:bg-amber-600' 
                 : 'bg-indigo-600 hover:bg-indigo-700'
             }`}
+            title={isGateOpen ? "Close the gate" : "Open the gate to drop balls"}
           >
             {isGateOpen ? (
                 <>

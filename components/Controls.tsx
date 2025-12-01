@@ -109,8 +109,8 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
               type="range" min="1" max="10" step="1"
               value={config.ballSize}
               onChange={(e) => handleChange('ballSize', parseInt(e.target.value))}
-              disabled={disabled}
-              className="w-full accent-indigo-600 cursor-pointer disabled:opacity-50"
+              // Enabled always for runtime tuning
+              className="w-full accent-indigo-600 cursor-pointer"
             />
           </div>
           
@@ -123,8 +123,22 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
               type="range" min="0.1" max="1.0" step="0.1"
               value={config.ballRestitution}
               onChange={(e) => handleChange('ballRestitution', parseFloat(e.target.value))}
-              disabled={disabled}
-              className="w-full accent-indigo-600 cursor-pointer disabled:opacity-50"
+              // Enabled always for runtime tuning
+              className="w-full accent-indigo-600 cursor-pointer"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between mb-1">
+              <label className="text-sm font-medium text-slate-700">Friction</label>
+              <span className="text-sm text-slate-500">{config.ballFriction.toFixed(3)}</span>
+            </div>
+            <input 
+              type="range" min="0.000" max="0.100" step="0.001"
+              value={config.ballFriction}
+              onChange={(e) => handleChange('ballFriction', parseFloat(e.target.value))}
+              // Enabled always for runtime tuning
+              className="w-full accent-indigo-600 cursor-pointer"
             />
           </div>
         </div>

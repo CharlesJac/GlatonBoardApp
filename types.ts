@@ -6,6 +6,7 @@ export interface SimulationConfig {
   pegSize: number;
   ballSize: number;
   ballRestitution: number;
+  ballFriction: number;
   dropSpeedMs: number;
 }
 
