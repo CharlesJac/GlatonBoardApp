@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { SimulationConfig, BallDefinition, DEFAULT_COLORS } from '../types';
 import { Users, Info } from 'lucide-react';
@@ -54,7 +55,7 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
                   setConfig(prev => ({
                       ...prev, 
                       rowCount: val,
-                      bucketCount: val + 1 // Auto adjust buckets for valid galton
+                      bucketCount: Math.floor(val * 2) // Heuristic auto adjust, but user can override below
                     }));
               }}
               disabled={disabled}
@@ -68,7 +69,7 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
               <span className="text-sm text-slate-500">{config.bucketCount}</span>
             </div>
              <input 
-              type="range" min="4" max="30" step="1"
+              type="range" min="4" max="50" step="1"
               value={config.bucketCount}
               onChange={(e) => handleChange('bucketCount', parseInt(e.target.value))}
               disabled={disabled}
@@ -82,7 +83,7 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
               <span className="text-sm text-slate-500">{config.pegSize}px</span>
             </div>
              <input 
-              type="range" min="3" max="10" step="1"
+              type="range" min="2" max="10" step="1"
               value={config.pegSize}
               onChange={(e) => handleChange('pegSize', parseInt(e.target.value))}
               disabled={disabled}
@@ -105,7 +106,7 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
               <span className="text-sm text-slate-500">{config.ballSize}px</span>
             </div>
             <input 
-              type="range" min="2" max="10" step="1"
+              type="range" min="1" max="10" step="1"
               value={config.ballSize}
               onChange={(e) => handleChange('ballSize', parseInt(e.target.value))}
               disabled={disabled}
@@ -114,20 +115,6 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
           </div>
           
           <div>
-            <div className="flex justify-between mb-1">
-              <label className="text-sm font-medium text-slate-700">Drop Rate (ms)</label>
-              <span className="text-sm text-slate-500">{config.dropSpeedMs}ms</span>
-            </div>
-            <input 
-              type="range" min="10" max="500" step="10"
-              value={config.dropSpeedMs}
-              onChange={(e) => handleChange('dropSpeedMs', parseInt(e.target.value))}
-              disabled={disabled}
-              className="w-full accent-indigo-600 cursor-pointer disabled:opacity-50"
-            />
-          </div>
-
-           <div>
             <div className="flex justify-between mb-1">
               <label className="text-sm font-medium text-slate-700">Bounciness</label>
               <span className="text-sm text-slate-500">{config.ballRestitution}</span>
@@ -170,7 +157,7 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
                              <input 
                                 type="number" 
                                 min="0" 
-                                max="1000"
+                                max="2000"
                                 value={count}
                                 onChange={(e) => handleCountChange(color.id, parseInt(e.target.value) || 0)}
                                 className="w-full bg-white border border-slate-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -179,11 +166,6 @@ const Controls: React.FC<ControlsProps> = ({ config, setConfig, ballDefinitions,
                     </div>
                 );
             })}
-        </div>
-        
-        <div className="mt-3 flex items-start gap-2 text-xs text-slate-500">
-             <Info className="w-4 h-4 mt-0.5 flex-none text-slate-400" />
-             <p>Specify the number of balls for each color. The total count will update automatically.</p>
         </div>
       </section>
       

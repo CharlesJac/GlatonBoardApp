@@ -1,25 +1,26 @@
+
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Play, RotateCcw, Pause } from 'lucide-react';
+import { LayoutDashboard, Play, RotateCcw, Pause, ArrowDownToLine, PlusCircle, Lock, Unlock } from 'lucide-react';
 import GaltonBoard from './components/GaltonBoard';
 import Controls from './components/Controls';
 import { SimulationConfig, BallColor, DEFAULT_COLORS, SimulationStatus, BallDefinition } from './types';
 
 const App: React.FC = () => {
-  const [status, setStatus] = useState<SimulationStatus>('idle');
+  const [status, setStatus] = useState<SimulationStatus>('empty');
   const [config, setConfig] = useState<SimulationConfig>({
-    rowCount: 12,
-    ballCount: 200, // This will be overwritten by the sum of ballDefinitions
-    bucketCount: 13, 
-    pegSize: 6,
-    ballSize: 5,
+    rowCount: 6,
+    ballCount: 2000, 
+    bucketCount: 22, 
+    pegSize: 4,
+    ballSize: 2,
     ballRestitution: 0.5,
     dropSpeedMs: 50,
   });
 
   // User defines counts for each color
   const [ballDefinitions, setBallDefinitions] = useState<BallDefinition[]>([
-    { color: DEFAULT_COLORS[0], count: 100 },
-    { color: DEFAULT_COLORS[1], count: 100 },
+    { color: DEFAULT_COLORS[0], count: 1000 },
+    { color: DEFAULT_COLORS[1], count: 1000 },
     { color: DEFAULT_COLORS[2], count: 0 },
     { color: DEFAULT_COLORS[3], count: 0 },
     { color: DEFAULT_COLORS[4], count: 0 },
@@ -73,46 +74,37 @@ const App: React.FC = () => {
     setBucketLabels(newLabels);
   };
 
-  const handleStart = () => {
-    if (ballQueue.length === 0) return;
-    setStatus('running');
+  // Triggers for Board Actions
+  const [fillTrigger, setFillTrigger] = useState(0);
+  const [resetTrigger, setResetTrigger] = useState(0);
+  const [isGateOpen, setIsGateOpen] = useState(false);
+
+  const handleFill = () => {
+    // Ensure physics is running so balls can stack
+    if (status !== 'running') {
+        setStatus('running');
+    }
+    setFillTrigger(prev => prev + 1);
   };
-  const handlePause = () => setStatus('paused');
-  const handleReset = () => setStatus('idle');
+
+  const handleRelease = () => {
+    setIsGateOpen(prev => !prev);
+  };
+
+  const handleReset = () => {
+    setIsGateOpen(false);
+    setResetTrigger(prev => prev + 1);
+    setStatus('empty');
+  };
 
   // Triggered when simulation detects all balls have settled
   const handleComplete = () => {
-    if (status === 'running') {
-        setStatus('paused');
-    }
+    // Optional: Auto-pause logic could go here, but with manual controls we might want to keep it running
   };
 
   const handleResetAndPlay = () => {
-    setStatus('idle');
-    // Allow a brief moment for the board to clear (useEffect in GaltonBoard runs on 'idle')
-    setTimeout(() => {
-        if (ballQueue.length > 0) {
-            setStatus('running');
-        }
-    }, 50);
+     handleReset();
   };
-
-  // Keyboard Shortcuts (Space to Reset + Play)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.code === 'Space') {
-             // Ignore if user is typing in an input field
-             if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
-                 return;
-             }
-             e.preventDefault();
-             handleResetAndPlay();
-        }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [ballQueue.length]);
-
 
   // Aspect Ratio Logic
   const mainContainerRef = useRef<HTMLDivElement>(null);
@@ -125,8 +117,8 @@ const App: React.FC = () => {
         if (!mainContainerRef.current) return;
         const { clientWidth: width, clientHeight: height } = mainContainerRef.current;
         
-        // Target Aspect Ratio 9:16
-        const targetRatio = 9 / 16;
+        // Target Aspect Ratio 1.6 (Wide Landscape)
+        const targetRatio = 1.6;
         const containerRatio = width / height;
 
         let w, h;
@@ -164,23 +156,37 @@ const App: React.FC = () => {
         </div>
         
         <div className="flex items-center gap-3">
-          {status === 'running' ? (
-             <button
-             onClick={handlePause}
-             className="flex items-center gap-2 px-4 py-2 bg-amber-100 text-amber-700 hover:bg-amber-200 rounded-md font-medium transition-colors"
-           >
-             <Pause className="w-4 h-4" /> Pause
-           </button>
-          ) : (
-            <button
-              onClick={handleStart}
-              disabled={ballQueue.length === 0}
-              className={`flex items-center gap-2 px-4 py-2 text-white rounded-md font-medium shadow-sm transition-colors ${ballQueue.length === 0 ? 'bg-slate-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-            >
-              <Play className="w-4 h-4" /> {status === 'paused' ? 'Resume' : 'Start'}
-            </button>
-          )}
+          
+          {/* 1. Fill Button (Incremental) */}
+          <button
+            onClick={handleFill}
+            // Always enabled unless we decide otherwise. Usually Fill is allowed whenever.
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-indigo-600 hover:bg-indigo-50 rounded-md font-medium transition-colors shadow-sm active:translate-y-0.5"
+          >
+            <PlusCircle className="w-4 h-4" /> Fill
+          </button>
+
+          {/* 2. Release/Close Button (Switch) */}
+          <button
+            onClick={handleRelease}
+            className={`flex items-center gap-2 px-4 py-2 text-white rounded-md font-medium shadow-sm transition-colors w-32 justify-center ${
+                isGateOpen 
+                ? 'bg-amber-500 hover:bg-amber-600' 
+                : 'bg-indigo-600 hover:bg-indigo-700'
+            }`}
+          >
+            {isGateOpen ? (
+                <>
+                    <Lock className="w-4 h-4" /> Close
+                </>
+            ) : (
+                <>
+                    <Unlock className="w-4 h-4" /> Release
+                </>
+            )}
+          </button>
          
+          {/* 3. Reset Button */}
           <button
             onClick={handleReset}
             className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-md font-medium transition-colors"
@@ -196,15 +202,14 @@ const App: React.FC = () => {
         <div 
           ref={mainContainerRef}
           className="flex-1 relative bg-slate-50 p-4 flex items-center justify-center overflow-hidden"
-          onDoubleClick={handleResetAndPlay}
-          title="Double click to Reset & Play"
+          onDoubleClick={handleReset}
+          title="Double click to Reset"
         >
           <div 
             className="bg-white rounded-xl shadow-inner border border-slate-200 overflow-hidden relative flex-none"
             style={{ 
                 width: boardSize.width, 
                 height: boardSize.height,
-                // Fallback / transition smoothness
                 transition: 'width 0.1s ease-out, height 0.1s ease-out'
             }}
           >
@@ -215,6 +220,9 @@ const App: React.FC = () => {
                 onComplete={handleComplete}
                 bucketLabels={bucketLabels}
                 onLabelChange={handleLabelChange}
+                fillTrigger={fillTrigger}
+                resetTrigger={resetTrigger}
+                isGateOpen={isGateOpen}
              />
           </div>
         </div>
@@ -226,6 +234,8 @@ const App: React.FC = () => {
             setConfig={setConfig} 
             ballDefinitions={ballDefinitions}
             setBallDefinitions={setBallDefinitions}
+            // Disable controls if balls are on the board (running status is loosely used for physics active)
+            // A better check might be if fillTrigger > 0, but status === 'running' is a good proxy for "active session"
             disabled={status === 'running'}
           />
         </aside>

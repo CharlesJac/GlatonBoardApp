@@ -1,3 +1,4 @@
+
 export interface SimulationConfig {
   rowCount: number;
   ballCount: number;
@@ -19,7 +20,7 @@ export interface BallDefinition {
   count: number;
 }
 
-export type SimulationStatus = 'idle' | 'running' | 'paused' | 'completed';
+export type SimulationStatus = 'empty' | 'filled' | 'running' | 'paused' | 'completed';
 
 export const DEFAULT_COLORS: BallColor[] = [
   { id: '1', color: '#3b82f6', name: 'Blue' },   // blue-500
