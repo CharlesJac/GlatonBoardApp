@@ -30,7 +30,13 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   const engineRef = useRef<Matter.Engine | null>(null);
   const renderRef = useRef<Matter.Render | null>(null);
   const runnerRef = useRef<Matter.Runner | null>(null);
-  const gateRef = useRef<Matter.Body | null>(null);
+  
+  // Gate Refs
+  const leftGateRef = useRef<Matter.Body | null>(null);
+  const rightGateRef = useRef<Matter.Body | null>(null);
+  
+  // State Refs for Loop Access
+  const isGateOpenRef = useRef(isGateOpen);
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const animationFrameRef = useRef<number>(0);
@@ -39,6 +45,10 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
   useEffect(() => {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
+
+  useEffect(() => {
+    isGateOpenRef.current = isGateOpen;
+  }, [isGateOpen]);
   
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
@@ -163,7 +173,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       if (dimensions.width === 0) return;
       setupStaticBoard();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetTrigger, config, dimensions]); // Re-run if config or dimensions change too
+  }, [resetTrigger, config, dimensions]); 
 
   // 2. Fill Trigger: Spawn Balls
   useEffect(() => {
@@ -173,23 +183,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
       // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fillTrigger]);
 
-  // 3. Gate Trigger: Toggle Gate
-  useEffect(() => {
-      if (!engineRef.current || !gateRef.current) return;
-      const world = engineRef.current.world;
-      
-      if (isGateOpen) {
-          // Open: Remove gate body
-          if (Matter.Composite.get(world, gateRef.current.id, 'body')) {
-              Matter.World.remove(world, gateRef.current);
-          }
-      } else {
-          // Close: Add gate body back if missing
-          if (!Matter.Composite.get(world, gateRef.current.id, 'body')) {
-              Matter.World.add(world, gateRef.current);
-          }
-      }
-  }, [isGateOpen]);
+  // 3. Gate Trigger is now handled in the loop via refs for animation
 
 
   // Setup Static Board (Funnel, Pegs, Bins, Gate)
@@ -226,12 +220,36 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
         isStatic: true, render: woodRender, friction: 0, restitution: 0
     });
 
-    // --- Gate (Initially created) ---
-    const gate = Matter.Bodies.rectangle(width/2, funnelTipY + 5, gap + 20, 10, {
+    // --- Sliding Gates ---
+    // Width needs to cover half the gap plus overlap to slide under funnel
+    const gateOverlap = 30;
+    const centerOverlap = 5; // Overlap at the center to prevent leaks
+    const gateWidth = (gap / 2) + gateOverlap; 
+    const gateHeight = 14;
+    // Position gate at the funnel tip level so it physically overlaps vertically
+    const gateY = funnelTipY; 
+
+    // Initial Positions (Closed)
+    // Left gate right edge at center + centerOverlap
+    const leftGateX = (width / 2) - (gateWidth / 2) + centerOverlap;
+    // Right gate left edge at center - centerOverlap
+    const rightGateX = (width / 2) + (gateWidth / 2) - centerOverlap;
+
+    const leftGate = Matter.Bodies.rectangle(leftGateX, gateY, gateWidth, gateHeight, {
         isStatic: true,
-        render: { visible: false } // Invisible gate, but solid
+        render: { fillStyle: '#000000' },
+        friction: 0.1
     });
-    gateRef.current = gate;
+    
+    const rightGate = Matter.Bodies.rectangle(rightGateX, gateY, gateWidth, gateHeight, {
+        isStatic: true,
+        render: { fillStyle: '#000000' },
+        friction: 0.1
+    });
+
+    leftGateRef.current = leftGate;
+    rightGateRef.current = rightGate;
+
 
     // --- Pegs ---
     const pegs: Matter.Body[] = [];
@@ -273,12 +291,8 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
     
     const floor = Matter.Bodies.rectangle(width/2, height + 50, width * 2, 100, { isStatic: true, friction: 0 });
 
-    const bodiesToAdd = [...pegs, ...bins, funnelLeft, funnelRight, floor];
+    const bodiesToAdd = [...pegs, ...bins, funnelLeft, funnelRight, floor, leftGate, rightGate];
     
-    // Add gate initially? Only if isGateOpen is false.
-    // The useEffect will handle syncing, but initial add helps.
-    if (!isGateOpen) bodiesToAdd.push(gate);
-
     Matter.World.add(world, bodiesToAdd);
   };
 
@@ -305,9 +319,7 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
             const startX = (width - rowWidth) / 2;
             
             const x = startX + (col * ballSpacing) + (Math.random() - 0.5) * 6;
-            // Start higher up each time? 
-            // Just spawn them high enough. We can stack them.
-            // Using a random Y range helps.
+            // Spawn higher up
             const y = funnelTipY - 50 - (row * ballSpacing * 1.1) - (Math.random() * 50);
 
             return Matter.Bodies.circle(x, y, ballSize, {
@@ -325,7 +337,6 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
 
   // Simulation Loop
   useEffect(() => {
-    // If running or filled (basically if physics needs to run), we loop
     if (status !== 'running') {
         if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
         return;
@@ -336,6 +347,45 @@ const GaltonBoard: React.FC<GaltonBoardProps> = ({
 
       if (engineRef.current && dimensions.width > 0) {
          const layout = getLayoutMetrics(dimensions.width, dimensions.height, config);
+         
+         // --- Gate Animation ---
+         if (leftGateRef.current && rightGateRef.current) {
+             const isOpen = isGateOpenRef.current;
+             const gap = config.ballSize * 4;
+             const gateOverlap = 30; 
+             const centerOverlap = 5; // Must match static setup to align
+             const gateWidth = (gap / 2) + gateOverlap;
+             const width = dimensions.width;
+             const center = width / 2;
+             
+             // Targets
+             // Closed: Shifted inwards by centerOverlap for tight seal
+             const closedLeftX = center - (gateWidth / 2) + centerOverlap;
+             const closedRightX = center + (gateWidth / 2) - centerOverlap;
+             
+             // Open: Slide out
+             const slideDist = gateWidth + 5;
+             const openLeftX = closedLeftX - slideDist;
+             const openRightX = closedRightX + slideDist;
+             
+             const targetLeftX = isOpen ? openLeftX : closedLeftX;
+             const targetRightX = isOpen ? openRightX : closedRightX;
+             
+             const currentLeft = leftGateRef.current.position.x;
+             const currentRight = rightGateRef.current.position.x;
+             
+             // Lerp factor
+             const t = 0.2;
+             
+             const newLeftX = currentLeft + (targetLeftX - currentLeft) * t;
+             const newRightX = currentRight + (targetRightX - currentRight) * t;
+             
+             Matter.Body.setPosition(leftGateRef.current, { x: newLeftX, y: leftGateRef.current.position.y });
+             Matter.Body.setPosition(rightGateRef.current, { x: newRightX, y: rightGateRef.current.position.y });
+         }
+
+
+         // --- Ball Physics Adjustments ---
          const balls = Matter.Composite.allBodies(engineRef.current.world).filter(b => b.label === 'ball');
          
          balls.forEach(ball => {
